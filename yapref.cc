@@ -1,0 +1,233 @@
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// I, the creator of this work, hereby release it into the public domain. This applies worldwide.
+// In case this is not legally possible: I grant anyone the right to use this work for any purpose, without any conditions,
+// unless such conditions are required by law.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Programmeinstellungen.
+
+#include "yabu.h"
+
+#include <string.h>
+#include <unistd.h>
+
+
+// Liste aller Objekte der Klasse Setting (bzw. davon abgeleitet).
+static Setting *Head = 0;
+
+
+// Konstruktor
+Setting::Setting (const char *name)
+    : name_ (name), next_ (0), prio_ (-1)
+{
+  // Objekt an die Liste anhängen
+  Setting **tp = &Head;
+  while (*tp)
+    tp = &(*tp)->next_;
+  *tp = this;
+}
+
+
+// Destruktor
+Setting::~Setting ()
+{
+  // Objekt aus der Liste entfernen
+  Setting **tp;
+  for (tp = &Head; *tp && *tp != this; tp = &(*tp)->next_)
+    ;
+  if (*tp)
+    *tp = next_;
+}
+
+void Setting::parse_line(const char *line, int prio)
+{
+  const char *name = next_name(&line);
+  if (name == 0)
+    YUERR(S01,syntax_error());
+  else {
+     if (skip_blank(&line) != '=')
+	YUERR(S01,syntax_error());
+     else {
+	++line;
+	skip_blank(&line);
+	Setting::set(name,prio,line);
+     }
+  }
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Ändert den Wert der Einstellung «name» auf «value» und die Prioriät auf «prio», wenn die
+// aktuelle Priorität kleiner oder gleich «prio»  ist.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void Setting::set(const char *name, int prio, const char *value)
+{
+   bool found = false;
+   Setting *p;
+   for (p = Head; p; p = p->next_) {
+      if (!strcmp(p->name_, name)) {
+         found = true;
+         p->set(prio, value);
+      }
+   }
+   if (!found)
+      //TODO: Msg:xxxxx
+      Message(MSG_1,"Ignoring %s",name);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Ändert den Wert auf «value» und die Prioriät auf «prio», wenn die aktuelle Priorität kleiner
+// oder gleich «prio»  ist.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void Setting::set(int prio, const char *value)
+{
+   if (value && prio >= prio_) {
+      prio_ = prio;
+      set_impl(value);
+   }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Liefert true, wenn die aktuelle Prorität kleiner oder gleich «prio» ist, und ändert in diesem
+// Fall die Priorität auf «prio».
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+bool Setting::can_set(int prio)
+{
+   if (prio < prio_)
+      return false;
+   prio_ = prio;
+   return true;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Gibt alle Einstellungen auf der Standardausgabe aus.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void Setting::dump()
+{
+   Message(MSG_0,"----- Preferences -----");
+   Setting *p;
+   for (p = Head; p; p = p->next_) {
+      const char *name = p->name_;
+      if (*name == ' ') ++name;
+      printf("%s: [%d] %s\n", name, p->prio_, (const char *)p->printable_value());
+   }
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Konstruktor.
+// name: Name der Einstellung.
+// dflt: Defaultwert.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+StringSetting::StringSetting(const char *name, const char *dflt)
+   : Setting(name), value_(dflt)
+{
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Wertzuweisung
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void StringSetting::set_impl(const char *value)
+{
+   char tmp[1000];
+   strncpy(tmp, value, sizeof(tmp));
+   unescape(tmp);
+   value_ = str_freeze(tmp);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Wert in lesbarer Form ausgeben
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+Str StringSetting::printable_value() const
+{
+   Str s;
+   escape(s, value_);
+   return s;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Konstruktor.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+BooleanSetting::BooleanSetting(const char *name, bool dflt)
+   :Setting(name), value_(dflt)
+{
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Wertzuweisung.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void BooleanSetting::set_impl(const char *value)
+{
+   skip_blank(&value);
+   const char *const BOOL[][2] = {
+      {"false", "true"}, {"0", "1"}, {"no", "yes"}, {"off", "on"}, {"disable", "enable"}
+   };
+   for (size_t n = 0; n < sizeof(BOOL) / sizeof(BOOL[0]); ++n) {
+      if (!strcasecmp(value, BOOL[n][0])) {
+         value_ = false;
+         return;
+      }
+      if (!strcasecmp(value, BOOL[n][1])) {
+         value_ = true;
+         return;
+      }
+   }
+   YUERR(S07,bad_bool_value(value));
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Wert als String.
+// return: "true" oder "false".
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+Str BooleanSetting::printable_value() const 
+{
+   return value_ ? "true" : "false";
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Konstruktor.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+IntegerSetting::IntegerSetting(const char *name, int min, int max, int dflt)
+   : Setting(name), min_(min), max_(max), value_(dflt)
+{
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Wertzuweisung
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void IntegerSetting::set_impl(const char *value)
+{
+   int val;
+   if (!str2int(&val,value))
+      YUERR(S08,bad_int_value(value));
+   else if (val < min_ || val > max_)
+      YUERR(S09,int_out_of_range(val,min_,max_));
+   else
+      value_ = val;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Wert als String.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+Str IntegerSetting::printable_value() const 
+{
+   return Str().printf("%d", value_);
+}
+
+// vim:sw=3:cin:fileencoding=utf-8
